@@ -1,0 +1,80 @@
+---
+title: "This calculates the Neftel cell states based on the custom calculation"
+author: "Ashwini Patil, Combinatics"
+output: html_notebook
+---
+
+# Load packages
+```{r}
+library(Seurat)
+library(reshape2)
+
+```
+
+# Read Neftel subgroup marker genes
+```{r}
+
+gbm.genes.tab <- read.table("neftel_markers.txt", header = TRUE, row.names = NULL, sep = "\t")
+gbm.genes.tab <- gbm.genes.tab[,!(colnames(gbm.genes.tab) %in% c("G1_S", "G2_M"))]
+gbm.genes.lst <- melt(gbm.genes.tab, measure.vars = colnames(gbm.genes.tab))
+gbm.genes.lst <- gbm.genes.lst[gbm.genes.lst$value != "",]
+
+gbm.genes.uniq <- unique(gbm.genes.lst$value)
+
+table(gbm.genes.lst$variable)
+
+```
+
+# Calculate the meta module score for each Neftel subgroup
+```{r}
+
+obj <- readRDS("Abdelfattah.rds")
+
+Idents(obj) <- "Assignment"
+obj.mal <- subset(obj, ident = "Glioma")
+obj.mal.df <- GetAssayData(object = obj.mal[["RNA"]], slot = "data")
+
+# Calculate aggregate expression per gene and remove genes with 0 expression in tumor cells
+genes.aggregate.expr <- sort(rowMeans(obj.mal.df))
+genes.aggregate.expr <- genes.aggregate.expr[genes.aggregate.expr > 0]
+
+obj.mal.df <- obj.mal.df[row.names(obj.mal.df) %in% names(genes.aggregate.expr),]
+
+gbm_states <- unique(gbm.genes.lst$variable)
+
+state_scores <- matrix(NA,nrow=ncol(obj.mal.df),ncol=length(gbm_states),dimnames = list(colnames(obj.mal.df), gbm_states))
+
+for(g in gbm_states){
+  
+  cat(g, "\n")
+  
+  genes <- gbm.genes.lst[gbm.genes.lst$variable == g,]$value
+  
+  obj.mal.state <- obj.mal.df[row.names(obj.mal.df) %in% genes,]
+  obj.mal.nonstate <- obj.mal.df[!row.names(obj.mal.df) %in% genes,]
+  
+  # Calculate relative expression for state
+  mean_exp_tumor_state <- rowMeans(obj.mal.state)
+  obj.mal.state.rel <- obj.mal.state/mean_exp_tumor_state
+  mean_rel_tumor_state <- colMeans(obj.mal.state.rel)
+  
+  # Calculate relative expression for non-state
+  mean_exp_tumor_nonstate <- rowMeans(obj.mal.nonstate)
+  obj.mal.nonstate.rel <- obj.mal.nonstate/mean_exp_tumor_nonstate
+  mean_rel_tumor_nonstate <- colMeans(obj.mal.nonstate.rel)
+
+    
+  # Calculate state score
+  state.score <- mean_rel_tumor_state/mean_rel_tumor_nonstate
+  
+  state_scores[, g] <- state.score
+}
+
+cellstate <- apply(state_scores[,1:6], 1, function(x) ifelse(max(x) > 1, names(which.max(x)), "None"))
+obj.mal <- AddMetaData(obj.mal, metadata = cellstate, col.name = "cellstate")
+obj <- AddMetaData(obj, metadata = cellstate, col.name = "cellstate")
+
+### Save the object now for reloading
+saveRDS(obj, file = "Abdelfattah.rds")
+
+```
